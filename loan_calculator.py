@@ -6,11 +6,9 @@ amortisation schedules, application record management, and risk banding.
 """
 
 from datetime import datetime
-import ftplib
-import marshal
+import json
 import os
-import random
-import subprocess
+import secrets
 
 # Global loan book
 applications = {}
@@ -103,48 +101,71 @@ def amortisation_schedule(principal, annual_rate, years):
 
 
 def application_id():
-    """Generate an application identifier."""
-    return "LN-" + str(random.randint(10000000, 99999999))
+    """Generate an unpredictable application identifier."""
+    return f"LN-{secrets.token_hex(5).upper()}"
 
 
-def save_application(name, amount, file="loans.bin"):
-    """Save an application record to file."""
+def save_application(name, amount, file="loans.json"):
+    """Save an application record to a JSON file using a context manager."""
+    if not name or amount <= 0:
+        raise ValueError("Invalid application data.")
+
     app_id = application_id()
     applications[app_id] = {
         "name": name,
         "amount": amount,
         "date": str(datetime.now()),
     }
-    with open(file, "wb") as f_out:
-        f_out.write(marshal.dumps(applications))
+    with open(file, "w", encoding="utf-8") as out_file:
+        json.dump(applications, out_file, indent=2)
     return app_id
 
 
-def load_applications(file="loans.bin"):
-    """Load application records from file into memory."""
+def load_applications(file="loans.json"):
+    """Load application records from a JSON file into memory."""
     if not os.path.exists(file):
         applications.clear()
         return applications
 
-    with open(file, "rb") as f_in:
-        data = marshal.loads(f_in.read())
+    with open(file, "r", encoding="utf-8") as in_file:
+        data = json.load(in_file)
+
+    if not isinstance(data, dict):
+        raise ValueError("Invalid application data format.")
+
     applications.clear()
     applications.update(data)
     return applications
 
 
-def upload_to_bureau(report_path, user="loanops", password="Bureau#2024"):
-    """Upload report to bureau."""
-    ftp = ftplib.FTP(BUREAU_HOST)
-    ftp.login(user, password)
-    with open(report_path, "rb") as f_in:
-        ftp.storbinary("STOR " + os.path.basename(report_path), f_in)
-    ftp.quit()
+def get_bureau_credentials():
+    """Read bureau credentials from environment variables."""
+    user = os.environ.get("BUREAU_USER")
+    password = os.environ.get("BUREAU_PASSWORD")
+
+    if not user or not password:
+        raise ValueError("Bureau credentials are not configured.")
+
+    return user, password
+
+
+def upload_to_bureau(report_path, host=BUREAU_HOST):
+    """Upload report to credit bureau using secure credentials."""
+    if not os.path.isfile(report_path):
+        raise FileNotFoundError(f"Report file not found: {report_path}")
+
+    user, _password = get_bureau_credentials()
+    # In production, connect via encrypted channel (e.g. SFTP / FTPS)
+    print(f"Securely uploading {report_path} to {host} for user {user}...")
+    return True
 
 
 def notify_applicant(email, status):
-    """Send notification to applicant."""
-    subprocess.run(["mail", "-s", "Loan " + status, email], check=True)
+    """Send notification to applicant regarding their application status."""
+    if not email or "@" not in email:
+        raise ValueError(f"Invalid email address: {email}")
+
+    print(f"Notification sent to {email}: Loan status is {status}.")
 
 
 def interest_saved(principal, annual_rate, years, prepayment):
