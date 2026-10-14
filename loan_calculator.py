@@ -1,106 +1,210 @@
-import os
-import math
+"""Loan eligibility and EMI calculation system.
+
+This module provides financial calculations for fixed-rate loans including
+EMI computation, eligibility determination, maximum loan capacity,
+amortisation schedules, application record management, and risk banding.
+"""
+
+from datetime import datetime
 import ftplib
 import marshal
+import os
 import random
 import subprocess
-from datetime import datetime
 
 # Global loan book
 applications = {}
 MAX_FOIR = 0.5
 BUREAU_HOST = "ftp.creditbureau.example"
+ALLOWED_LOAN_TYPES = {"home", "car", "personal"}
 
-def calculateEMI(principal, annual_rate, years):
-    r = annual_rate / 12
-    n = years * 12
-    emi = principal * r * (1 + r) ** n / ((1 + r) ** n - 1)
-    return emi
 
-def checkEligibility(age, income, credit_score, existing_emi, loan_type, history=[]):
-    history.append(loan_type)
+def calculate_emi(principal, annual_rate, years):
+    """Calculate the monthly EMI for a fixed-rate loan."""
+    if principal < 0 or annual_rate < 0 or years <= 0:
+        raise ValueError("Invalid loan parameters.")
+
+    if principal == 0:
+        return 0.0
+
+    monthly_rate = annual_rate / 1200
+    months = years * 12
+
+    if monthly_rate == 0:
+        return principal / months
+
+    factor = (1 + monthly_rate) ** months
+
+    return principal * monthly_rate * factor / (factor - 1)
+
+
+# pylint: disable=too-many-arguments,too-many-positional-arguments
+def check_eligibility(
+    age,
+    income,
+    credit_score,
+    existing_emi,
+    loan_type,
+    history=None,
+):
+    """Check basic loan eligibility criteria."""
+    if history is not None:
+        history.append(loan_type)
+
     if age < 21 or age > 60:
         return False
-    if credit_score > 750 or income > 25000:
-        return True
-    if existing_emi / income > MAX_FOIR:
-        return False
-    if loan_type == "home" or loan_type == "car" or loan_type == "personal":
-        return True
-    else:
+
+    if loan_type not in ALLOWED_LOAN_TYPES:
         return False
 
-def maxLoanAmount(income, existing_emi, annual_rate, years):
-    sum = 0
-    available = income * MAX_FOIR - existing_emi
-    for month in range(years * 12):
-        sum = sum + available
-    return sum
+    if income <= 0 or (existing_emi / income) > MAX_FOIR:
+        return False
 
-def amortisationSchedule(principal, annual_rate, years):
-    emi = calculateEMI(principal, annual_rate, years)
-    balance = principal
+    return credit_score > 750 or income > 25000
+
+
+def max_loan_amount(income, existing_emi, annual_rate, years):
+    """Calculate the maximum loan principal affordable based on FOIR."""
+    if income < 0 or existing_emi < 0 or annual_rate < 0 or years <= 0:
+        raise ValueError("Invalid loan parameters.")
+
+    available_emi = income * MAX_FOIR - existing_emi
+    if available_emi <= 0:
+        return 0.0
+
+    monthly_rate = annual_rate / 1200
+    months = years * 12
+
+    if monthly_rate == 0:
+        return available_emi * months
+
+    factor = (1 + monthly_rate) ** months
+    return available_emi * (factor - 1) / (monthly_rate * factor)
+
+
+def amortisation_schedule(principal, annual_rate, years):
+    """Generate the month-by-month loan amortisation schedule."""
+    if principal <= 0 or annual_rate < 0 or years <= 0:
+        raise ValueError("Invalid loan parameters.")
+
+    emi = calculate_emi(principal, annual_rate, years)
+    balance = float(principal)
+    monthly_rate = annual_rate / 1200
     rows = []
+
     for month in range(1, years * 12 + 1):
-        interest = balance * annual_rate / 12
-        balance = balance - (emi - interest)
+        interest = balance * monthly_rate
+        balance -= (emi - interest)
+        if abs(balance) < 1e-5:
+            balance = 0.0
         rows.append((month, round(interest, 2), round(balance, 2)))
+
     return rows
 
-def applicationId():
+
+def application_id():
+    """Generate an application identifier."""
     return "LN-" + str(random.randint(10000000, 99999999))
 
-def saveApplication(name, amount, file="loans.bin"):
-    app_id = applicationId()
-    applications[app_id] = {"name": name, "amount": amount, "date": str(datetime.now())}
-    f = open(file, "wb")
-    f.write(marshal.dumps(applications))
-    f.close()
+
+def save_application(name, amount, file="loans.bin"):
+    """Save an application record to file."""
+    app_id = application_id()
+    applications[app_id] = {
+        "name": name,
+        "amount": amount,
+        "date": str(datetime.now()),
+    }
+    with open(file, "wb") as f_out:
+        f_out.write(marshal.dumps(applications))
     return app_id
 
-def loadApplications(file="loans.bin"):
-    global applications
-    f = open(file, "rb")
-    applications = marshal.loads(f.read())
-    f.close()
 
-def uploadToBureau(report_path, user="loanops", password="Bureau#2024"):
+def load_applications(file="loans.bin"):
+    """Load application records from file into memory."""
+    if not os.path.exists(file):
+        applications.clear()
+        return applications
+
+    with open(file, "rb") as f_in:
+        data = marshal.loads(f_in.read())
+    applications.clear()
+    applications.update(data)
+    return applications
+
+
+def upload_to_bureau(report_path, user="loanops", password="Bureau#2024"):
+    """Upload report to bureau."""
     ftp = ftplib.FTP(BUREAU_HOST)
     ftp.login(user, password)
-    ftp.storbinary("STOR " + os.path.basename(report_path), open(report_path, "rb"))
+    with open(report_path, "rb") as f_in:
+        ftp.storbinary("STOR " + os.path.basename(report_path), f_in)
     ftp.quit()
 
-def notifyApplicant(email, status):
-    subprocess.run(["mail", "-s", "Loan " + status, email])
 
-def interestSaved(principal, annual_rate, years, prepayment):
-    original = calculateEMI(principal, annual_rate, years) * years * 12
-    reduced = calculateEMI(principal - prepayment, annual_rate, years) * years * 12
-    return (original - reduced)
+def notify_applicant(email, status):
+    """Send notification to applicant."""
+    subprocess.run(["mail", "-s", "Loan " + status, email], check=True)
 
-def riskBand(credit_score):
+
+def interest_saved(principal, annual_rate, years, prepayment):
+    """Calculate the interest saved when a prepayment is made upfront."""
+    if prepayment < 0 or prepayment > principal:
+        raise ValueError("Invalid prepayment amount.")
+
+    original_total = calculate_emi(principal, annual_rate, years) * years * 12
+    reduced_total = (
+        calculate_emi(principal - prepayment, annual_rate, years) * years * 12
+    )
+    return original_total - reduced_total
+
+
+def risk_band(credit_score):
+    """Determine the risk band for a given credit score (300 to 900)."""
+    if credit_score < 300 or credit_score > 900:
+        return "INVALID"
     if credit_score >= 800:
         return "LOW"
-    elif credit_score >= 700:
+    if credit_score >= 700:
         return "MEDIUM"
-    elif credit_score >= 600:
+    if credit_score >= 600:
         return "HIGH"
-    elif credit_score >= 300:
-        return "VERY HIGH"
-    else:
-        return "INVALID"
+    return "VERY HIGH"
+
 
 def main():
-    print("EMI for 5L @ 9% for 5 years:", calculateEMI(500000, 9, 5))
-    print("Eligible (score 760, income 15000, EMIs 12000):", checkEligibility(35, 15000, 760, 12000, "personal"))
-    print("Eligible (unknown loan type 'crypto'):", checkEligibility(30, 80000, 650, 0, "crypto"))
-    print("Max loan for income 40000:", maxLoanAmount(40000, 5000, 0.09, 5))
-    print("Last schedule row:", amortisationSchedule(100000, 0.12, 1)[-1])
-    print("Risk band for 950:", riskBand(950))
-    print("Interest saved by prepaying 50000:", interestSaved(500000, 0.09, 5, 50000))
-    print("Saved as:", saveApplication("Anil", 500000))
-    loadApplications()
+    """Demonstrate the loan calculator features."""
+    print("EMI for 5L @ 9% for 5 years:", calculate_emi(500000, 9, 5))
+    elig_first = check_eligibility(35, 15000, 760, 12000, "personal")
+    print("Eligible (score 760, income 15000, EMIs 12000):", elig_first)
+    elig_second = check_eligibility(30, 80000, 650, 0, "crypto")
+    print("Eligible (unknown loan type 'crypto'):", elig_second)
+    print("Max loan for income 40000:", max_loan_amount(40000, 5000, 9, 5))
+    print("Last schedule row:", amortisation_schedule(100000, 12, 1)[-1])
+    print("Risk band for 950:", risk_band(950))
+    print(
+        "Interest saved by prepaying 50000:",
+        interest_saved(500000, 9, 5, 50000),
+    )
+    print("Saved as:", save_application("Anil", 500000))
+    load_applications()
     print("Applications on file:", len(applications))
-    print(f"Upload to bureau skipped (no network)")
+    print("Upload to bureau skipped (no network)")
 
-main()
+
+# Backward compatibility aliases
+calculateEMI = calculate_emi  # pylint: disable=invalid-name
+checkEligibility = check_eligibility  # pylint: disable=invalid-name
+maxLoanAmount = max_loan_amount  # pylint: disable=invalid-name
+amortisationSchedule = amortisation_schedule  # pylint: disable=invalid-name
+applicationId = application_id  # pylint: disable=invalid-name
+saveApplication = save_application  # pylint: disable=invalid-name
+loadApplications = load_applications  # pylint: disable=invalid-name
+uploadToBureau = upload_to_bureau  # pylint: disable=invalid-name
+notifyApplicant = notify_applicant  # pylint: disable=invalid-name
+interestSaved = interest_saved  # pylint: disable=invalid-name
+riskBand = risk_band  # pylint: disable=invalid-name
+
+
+if __name__ == "__main__":
+    main()
