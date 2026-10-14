@@ -92,7 +92,8 @@ def amortisation_schedule(principal, annual_rate, years):
 
     for month in range(1, years * 12 + 1):
         interest = balance * monthly_rate
-        balance -= (emi - interest)
+        principal_payment = emi - interest
+        balance -= principal_payment
         if abs(balance) < 1e-5:
             balance = 0.0
         rows.append((month, round(interest, 2), round(balance, 2)))
@@ -197,11 +198,20 @@ def main():
     """Demonstrate the loan calculator features."""
     print("EMI for 5L @ 9% for 5 years:", calculate_emi(500000, 9, 5))
     elig_first = check_eligibility(35, 15000, 760, 12000, "personal")
-    print("Eligible (score 760, income 15000, EMIs 12000):", elig_first)
+    print(
+        "Eligible (score 760, income 15000, EMIs 12000):",
+        elig_first,
+    )
     elig_second = check_eligibility(30, 80000, 650, 0, "crypto")
     print("Eligible (unknown loan type 'crypto'):", elig_second)
-    print("Max loan for income 40000:", max_loan_amount(40000, 5000, 9, 5))
-    print("Last schedule row:", amortisation_schedule(100000, 12, 1)[-1])
+    print(
+        "Max loan for income 40000:",
+        max_loan_amount(40000, 5000, 9, 5),
+    )
+    print(
+        "Last schedule row:",
+        amortisation_schedule(100000, 12, 1)[-1],
+    )
     print("Risk band for 950:", risk_band(950))
     print(
         "Interest saved by prepaying 50000:",
